@@ -38,6 +38,10 @@ def rows_to_list(rows):
     return [dict(row) for row in rows]
 
 
+# 层级 → 标签（level 为源数据字段；类型缺失时按层级重述，不做推断）
+LEVEL_LABELS = {1: "省级", 2: "地级", 3: "县级", 4: "乡级"}
+
+
 # ========== 级联查询接口 ==========
 
 @app.get("/api/provinces")
@@ -84,8 +88,8 @@ def get_children(parent_code: str):
         
         items = rows_to_list(rows)
         
-        # 获取第一个子项的类型作为标签提示
-        first_type = items[0].get("type", "")
+        # 标签提示：优先用数据自带的类型；乡级接口未提供类型，按 level 重述
+        first_type = items[0].get("type") or LEVEL_LABELS.get(items[0].get("level"), "")
         
         # 检查子项是否还有下级
         first_code = items[0].get("code")

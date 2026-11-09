@@ -18,13 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 依据 level 设定四类类型
-LEVEL_TYPE_MAP = {
-    1: ("省级", 1),
-    2: ("地级", 2),
-    3: ("县级", 3),
-    4: ("乡级", 4),
-}
+# type_code：接口不提供、亦无权威国家标准，如实置空，不做人为分配；
+# region_type_dict 由清洗数据聚合生成（见 build_type_dict），不手工维护种子数据。
 
 class RegionsImporter:
     """行政区划数据导入器"""
@@ -79,35 +74,18 @@ class RegionsImporter:
         """)
         self.cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS uk_code_year ON regions(code, year)")
         
-        # 2. 创建类型字典表
+        # 2. 创建类型字典表（数据驱动：导入时由清洗数据聚合生成，不手工维护种子数据）
         self.cursor.execute("DROP TABLE IF EXISTS region_type_dict")
         self.cursor.execute("""
         CREATE TABLE IF NOT EXISTS region_type_dict (
-            type_code INTEGER PRIMARY KEY,
+            level TINYINT NOT NULL,
             type_name VARCHAR(20) NOT NULL,
-            level_range TINYINT NOT NULL,
-            description VARCHAR(100),
-            region_examples VARCHAR(200),
-            sort_order INT DEFAULT 0,
-            status TINYINT NOT NULL DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            region_count INT NOT NULL,
+            batch VARCHAR(20),
+            PRIMARY KEY (level, type_name)
         )
         """)
-        
-        # 插入四类初始化数据
-        init_data = [
-            (1, '省级', 1, '省级行政单位', '广东省、山东省', 1),
-            (2, '地级', 2, '地级行政单位', '广州市、延边州', 2),
-            (3, '县级', 3, '县级行政单位', '海淀区、昆山市', 3),
-            (4, '乡级', 4, '乡级行政单位', '某某街道、某某镇', 4),
-        ]
-        
-        self.cursor.executemany("""
-            INSERT INTO region_type_dict (type_code, type_name, level_range, description, region_examples, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, init_data)
-        
+
         self.conn.commit()
         logger.info("数据库初始化完成")
 
@@ -144,7 +122,10 @@ class RegionsImporter:
         
         regions = data.get("data", [])
         meta = data.get("meta", {})
-        data_year = meta.get("year") or datetime.now().year
+        # 批次年份：取采集时间（meta.crawl_time），仅标识导入批次，不冒充官方版本年份
+        crawl_time = str(meta.get("crawl_time") or "")
+        data_year = int(crawl_time[:4]) if crawl_time[:4].isdigit() else datetime.now().year
+        self.batch = crawl_time or None
         
         path_map = self.build_path_map(regions)
         
@@ -157,14 +138,17 @@ class RegionsImporter:
         
         total = len(regions)
         batch_size = 1000
-        
+
         for i in range(0, total, batch_size):
             batch = regions[i:i+batch_size]
             batch_data = []
             for j, r in enumerate(batch):
                 code = r.get("code")
                 level = r.get("level")
-                type_name, type_code = LEVEL_TYPE_MAP.get(level, (None, 0))
+                # 类型采用采集数据原值（1~3 级由树接口提供）；
+                # 乡级接口不返回类型，如实留空；type_code 无权威标准，置空
+                type_name = r.get("type") or None
+                type_code = None
                 batch_data.append((
                     code, r.get("name"), level, r.get("depth", level),
                     r.get("parent_code"), path_map.get(code, code),
@@ -188,13 +172,35 @@ class RegionsImporter:
             "CREATE INDEX IF NOT EXISTS idx_depth ON regions(depth)",
             "CREATE INDEX IF NOT EXISTS idx_path ON regions(path)",
             "CREATE INDEX IF NOT EXISTS idx_name ON regions(name)",
-            "CREATE INDEX IF NOT EXISTS idx_type_code ON regions(type_code)",
         ]
         for idx in indexes:
             self.cursor.execute(idx)
         self.conn.commit()
-        
+
+        self.build_type_dict()
+
         logger.info(f"导入完成！共 {total} 条记录。")
+
+    def build_type_dict(self):
+        """region_type_dict 由清洗数据聚合生成——每一行都有数据集背书，不手工维护。"""
+        self.cursor.execute("DROP TABLE IF EXISTS region_type_dict")
+        self.cursor.execute("""
+        CREATE TABLE region_type_dict (
+            level TINYINT NOT NULL,
+            type_name VARCHAR(20) NOT NULL,
+            region_count INT NOT NULL,
+            batch VARCHAR(20),
+            PRIMARY KEY (level, type_name)
+        )
+        """)
+        self.cursor.execute("""
+            INSERT INTO region_type_dict (level, type_name, region_count, batch)
+            SELECT level, type, COUNT(*), ?
+            FROM regions WHERE type IS NOT NULL
+            GROUP BY level, type
+        """, (self.batch,))
+        self.conn.commit()
+        logger.info("类型字典已由数据聚合生成（不含接口未提供的乡级类型）")
 
     def show_stats(self):
         """显示统计信息"""
@@ -212,7 +218,17 @@ class RegionsImporter:
         level_names = {1: "省级", 2: "地级", 3: "县级", 4: "乡级"}
         for lv, count in self.cursor.fetchall():
             print(f"  {level_names.get(lv, f'Level {lv}')}: {count:,}")
-            
+
+        # 区划类型统计（type 为接口返回原值；乡级接口不提供，如实为空）
+        self.cursor.execute("""
+            SELECT level, type, COUNT(*) as cnt FROM regions
+            GROUP BY level, type ORDER BY level, cnt DESC
+        """)
+        print("\n区划类型分布:")
+        for lv, type_name, count in self.cursor.fetchall():
+            label = type_name if type_name else "<空>（接口未提供乡级类型，如实留空）"
+            print(f"  level {lv} {label}: {count:,}")
+
         print("=" * 50)
 
 def main():

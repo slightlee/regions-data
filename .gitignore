@@ -5,3 +5,6 @@ __pycache__/
 .vercel
 
 .DS_Store
+
+# 采集脚本断点续传缓存
+data/raw/cache/

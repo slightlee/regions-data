@@ -3,6 +3,11 @@
 处理代码格式问题：
 - 省/地/县级：统一为6位代码
 - 乡/镇/街道级：统一为9位代码
+
+文件规则：
+- 对 data/raw/ 中的源文件只读，不改名、不移动、不覆盖
+- 明确排除断点文件 regions_*_tmp.json
+- 清洗结果以同名文件写入 data/processed/，形成 raw/processed 1:1 批次映射
 """
 
 import json
@@ -25,6 +30,10 @@ def normalize_code(code, level):
         return None
     
     code_str = str(code)
+
+    # 官方未发布代码时可能返回非数字占位符（如台湾省“资料暂缺”），原样保留，不补零造值
+    if not code_str.isdigit():
+        return code_str
     
     # 省/地/县级：6位代码
     if level in [1, 2, 3]:
@@ -62,6 +71,10 @@ def normalize_parent_code(parent_code, parent_level):
         return None
     
     parent_code_str = str(parent_code)
+
+    # 非数字占位符原样保留，不进行码位补齐
+    if not parent_code_str.isdigit():
+        return parent_code_str
     
     # 父级是省/地/县级：6位代码
     if parent_level in [1, 2, 3]:
@@ -158,6 +171,10 @@ def clean_regions_data(input_file, output_file):
         elif level == 4:
             stats["level_4"] += 1
     
+    # 数量守恒断言：清洗只做确定性变换，不允许增删记录
+    if len(cleaned_regions) != len(regions):
+        raise SystemExit(f"❌ 数量守恒失败: 输入 {len(regions):,} != 输出 {len(cleaned_regions):,}")
+
     # 保存清洗后的数据
     print(f"\n保存清洗后的数据到: {output_file}")
     
@@ -206,6 +223,17 @@ def clean_regions_data(input_file, output_file):
         print(f"   parent_code: {region['parent_code']} (6位)")
 
 
+def find_latest_final_file(directory):
+    """查找最新的已完成采集文件，排除断点续传的 _tmp.json。"""
+    files = [
+        name for name in os.listdir(directory)
+        if name.startswith("regions_")
+        and name.endswith(".json")
+        and not name.endswith("_tmp.json")
+    ]
+    return sorted(files)[-1] if files else None
+
+
 def main():
     """主函数"""
     # 自动寻找最新的原始数据文件
@@ -218,13 +246,11 @@ def main():
         print(f"❌ 错误: 原始数据目录不存在 - {raw_dir}")
         return
         
-    raw_files = [f for f in os.listdir(raw_dir) if f.startswith("regions_") and f.endswith(".json")]
-    if not raw_files:
-        print(f"❌ 错误: 找不到原始数据文件 in {raw_dir}")
+    latest_raw = find_latest_final_file(raw_dir)
+    if not latest_raw:
+        print(f"❌ 错误: 找不到已完成的原始数据文件 in {raw_dir}")
         return
-        
-    # 按文件名排序，获取最新的
-    latest_raw = sorted(raw_files)[-1]
+
     input_file = os.path.join(raw_dir, latest_raw)
     
     # 输出文件名沿用输入文件名，实现 1:1 映射
