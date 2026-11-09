@@ -49,8 +49,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # 接口地址与官方页面（XzqhVersionPublish.html）的同源调用保持一致。
 # 另存在 /9095/ 网关版（接口文档所载），实测与同源版返回字节级相同；
 # getCodeList 仅存在于同源路径，故统一使用同源路径。
-LIST_URL = "https://dmfw.mca.gov.cn/xzqh/getList"
-CODE_LIST_URL = "https://dmfw.mca.gov.cn/xzqh/getCodeList"
+LIST_URL = "换成实际接口地址"
+CODE_LIST_URL = "换成实际接口地址"
 
 PAGE_SIZE = 1000
 TIMEOUT = 30
